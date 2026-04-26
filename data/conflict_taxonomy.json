@@ -1,0 +1,41 @@
+{
+  "version": "1.0",
+  "description": "Promo Coherence Guard — auditable conflict types for retail promotion rules.",
+  "conflict_types": [
+    {
+      "id": "BELOW_FLOOR_PRICE",
+      "severity_default": "CRITICAL",
+      "summary": "Effective sale price can fall below the configured floor price after discounts stack or apply."
+    },
+    {
+      "id": "DOUBLE_DISCOUNT_STACK",
+      "severity_default": "WARNING",
+      "summary": "Multiple discounts may combine in a way that was not intended for trading."
+    },
+    {
+      "id": "CHANNEL_MISMATCH",
+      "severity_default": "WARNING",
+      "summary": "Promotion channel scope may not align with where the product is sold or priced."
+    },
+    {
+      "id": "CLEARANCE_PLUS_PROMO",
+      "severity_default": "WARNING",
+      "summary": "A clearance or markdown path is active while additional promotional discounts may still apply."
+    },
+    {
+      "id": "OVERLAP_SAME_SKU_SAME_WINDOW",
+      "severity_default": "WARNING",
+      "summary": "Two or more promotions target the same SKU in overlapping time windows, risking ambiguous or stacked outcomes."
+    },
+    {
+      "id": "MARGIN_BREACH",
+      "severity_default": "CRITICAL",
+      "summary": "Effective margin after discounts falls below policy or cost-based thresholds."
+    }
+  ],
+  "mvp_active_types": [
+    "BELOW_FLOOR_PRICE",
+    "OVERLAP_SAME_SKU_SAME_WINDOW",
+    "CLEARANCE_PLUS_PROMO"
+  ]
+}
