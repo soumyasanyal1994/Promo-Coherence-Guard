@@ -1,21 +1,17 @@
-"""
-Promo Coherence Guard — Streamlit UI.
-"""
+"""Promo Coherence Guard - FastAPI backend + Vue.js frontend."""
 from __future__ import annotations
 
 import hashlib
 import json
-import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
-import streamlit as st
-
-if __package__ in (None, ""):
-    # Support `streamlit run promo_guard/app.py` when cwd is not project root.
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from promo_guard.engine import (
     conflicts_to_dataframe,
@@ -24,7 +20,7 @@ from promo_guard.engine import (
     load_pricing_file,
     load_promotions_jsonl,
 )
-from promo_guard.llm_client import batch_explain
+from promo_guard.llm_client import CLAUDE_HAIKU_MODEL, batch_explain_with_provider
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
@@ -32,7 +28,7 @@ LOGS = ROOT / "logs"
 DEFAULT_PROMO = DATA / "sample_promotions.jsonl"
 DEFAULT_PRICE = DATA / "sample_pricing.csv"
 TAXONOMY = DATA / "conflict_taxonomy.json"
-# Bundled synthetic promos peak around this instant (Black Friday weekend 2026).
+STATIC_DIR = ROOT / "promo_guard" / "static"
 DEMO_AS_OF = datetime(2026, 11, 29, 12, 0, 0, tzinfo=timezone.utc)
 
 GEMINI_MODELS = [
@@ -40,6 +36,10 @@ GEMINI_MODELS = [
     "gemini-2.0-flash-lite",
     "gemini-1.5-flash",
 ]
+CLAUDE_MODELS = [CLAUDE_HAIKU_MODEL]
+
+app = FastAPI(title="Promo Coherence Guard")
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -47,241 +47,178 @@ def _sha256_bytes(data: bytes) -> str:
 
 
 def _write_temp_upload(data: bytes, suffix: str) -> Path:
-    """Write upload bytes to the OS temp dir (works on Windows; /tmp does not)."""
     with tempfile.NamedTemporaryFile(delete=False, prefix="pcg_", suffix=suffix) as tf:
         tf.write(data)
         return Path(tf.name)
 
 
-def _badge_style(sev: str) -> str:
-    palette = {
-        "CRITICAL": ("#7f1d1d", "#fecaca"),
-        "WARNING": ("#854d0e", "#fef08a"),
-        "INFO": ("#1e3a8a", "#bfdbfe"),
-    }
-    fg, bg = palette.get(sev, ("#111827", "#e5e7eb"))
-    return f"color:{fg};background:{bg};padding:4px 10px;border-radius:6px;font-weight:600;"
-
-
-def _append_audit(entry: dict) -> None:
+def _append_audit(entry: dict[str, Any]) -> None:
     LOGS.mkdir(parents=True, exist_ok=True)
     path = LOGS / "scans.jsonl"
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, default=str) + "\n")
 
 
-def main() -> None:
-    st.set_page_config(page_title="Promo Coherence Guard", layout="wide")
-    st.title("Promo Coherence Guard")
-    st.caption("Deterministic promotion conflicts first — LLM narratives are advisory explanations only.")
+def _normalize_utc_iso(as_of: str) -> datetime:
+    parsed = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
-    with st.sidebar:
-        st.subheader("Gemini")
-        api_key = st.text_input("Gemini API key", type="password", help="Stored only in this browser session.")
-        model_name = st.selectbox("Model", GEMINI_MODELS, index=0)
-        use_llm_in_scan = st.checkbox(
-            "Use Gemini during scan",
-            value=True,
-            help="When enabled, clicking 'Run conflict scan' also generates LLM explanations.",
-        )
-        max_llm_conflicts = st.number_input(
-            "Max conflicts to send to Gemini",
-            min_value=1,
-            max_value=200,
-            value=35,
-            help="Large scans can have hundreds of rows; Gemini is run in batches up to this many to avoid timeouts.",
-        )
-        st.subheader("Scan parameters")
-        channel = st.selectbox("Channel for pricing simulation", ["web", "app", "pos"], index=0)
-        as_of = st.datetime_input(
-            "As-of (UTC)",
-            value=DEMO_AS_OF,
-            help="Bundled sample data is anchored to Nov 2026; use this default to see seeded conflicts.",
-        )
-        horizon_days = st.number_input("Clearance horizon (days)", min_value=1, max_value=90, value=7)
 
-    col_tax, col_help = st.columns([1, 2])
-    with col_tax:
-        if TAXONOMY.exists():
-            tax = json.loads(TAXONOMY.read_text(encoding="utf-8"))
-            st.metric("MVP conflict types", len(tax.get("mvp_active_types", [])))
-    with col_help:
-        st.info(
-            "Upload promotions JSONL and pricing as **CSV or Excel (.xlsx)**, or use bundled samples. "
-            "Click 'Run conflict scan' to run deterministic detection and (optionally) Gemini explanations in one flow."
-        )
+@app.get("/")
+def index() -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html")
 
-    promos_file = st.file_uploader("Promotions (JSONL)", type=["jsonl", "txt"])
-    pricing_file = st.file_uploader(
-        "Product pricing (CSV or Excel)",
-        type=["csv", "xlsx", "xls"],
-        help="Excel must use the same column headers as the sample CSV on row 1.",
-    )
 
-    use_samples = st.checkbox("Use bundled sample data if no upload", value=True)
+@app.get("/_stcore/health")
+def stcore_health() -> dict[str, str]:
+    """Compatibility endpoint for stale Streamlit tabs/extensions."""
+    return {"status": "ok"}
 
-    if st.button("Run conflict scan", type="primary"):
+
+@app.get("/_stcore/host-config")
+def stcore_host_config() -> dict[str, Any]:
+    """Compatibility endpoint for stale Streamlit tabs/extensions."""
+    return {"allowedOrigins": ["*"], "useExternalAuthToken": False}
+
+
+@app.websocket("/_stcore/stream")
+async def stcore_stream(websocket: WebSocket) -> None:
+    """Compatibility websocket for stale Streamlit tabs/extensions."""
+    await websocket.accept()
+    await websocket.send_json({"status": "ok", "message": "Streamlit stream compatibility endpoint"})
+    await websocket.close()
+
+
+@app.get("/api/config")
+def config() -> dict[str, Any]:
+    taxonomy_count = 0
+    if TAXONOMY.exists():
+        taxonomy = json.loads(TAXONOMY.read_text(encoding="utf-8"))
+        taxonomy_count = len(taxonomy.get("mvp_active_types", []))
+    return {
+        "llm_providers": {
+            "gemini": {"label": "Google Gemini", "models": GEMINI_MODELS},
+            "claude": {"label": "Anthropic Claude", "models": CLAUDE_MODELS},
+        },
+        "channels": ["web", "app", "pos"],
+        "default_as_of_utc": DEMO_AS_OF.isoformat(),
+        "default_horizon_days": 7,
+        "taxonomy_count": taxonomy_count,
+    }
+
+
+@app.post("/api/scan")
+async def scan(
+    channel: str = Form("web"),
+    as_of_utc: str = Form(DEMO_AS_OF.isoformat()),
+    horizon_days: int = Form(7),
+    use_samples: bool = Form(True),
+    use_llm_in_scan: bool = Form(True),
+    llm_provider: str = Form("gemini"),
+    api_key: str = Form(""),
+    custom_endpoint: str = Form(""),
+    model_name: str = Form("gemini-2.0-flash"),
+    max_llm_conflicts: int = Form(35),
+    promos_file: UploadFile | None = File(None),
+    pricing_file: UploadFile | None = File(None),
+) -> dict[str, Any]:
+    try:
+        as_of = _normalize_utc_iso(as_of_utc)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid as-of datetime.") from exc
+
+    if promos_file is not None:
+        promo_bytes = await promos_file.read()
+        promos_path = _write_temp_upload(promo_bytes, ".jsonl")
         try:
-            if promos_file is not None:
-                promo_bytes = promos_file.getvalue()
-                promos_path = _write_temp_upload(promo_bytes, ".jsonl")
-                try:
-                    promos = load_promotions_jsonl(promos_path)
-                finally:
-                    promos_path.unlink(missing_ok=True)
-                promos_hash = _sha256_bytes(promo_bytes)
-            elif use_samples and DEFAULT_PROMO.exists():
-                promos = load_promotions_jsonl(DEFAULT_PROMO)
-                promos_hash = _sha256_bytes(DEFAULT_PROMO.read_bytes())
-            else:
-                st.error("Provide a promotions file or enable bundled samples.")
-                return
+            promos = load_promotions_jsonl(promos_path)
+        finally:
+            promos_path.unlink(missing_ok=True)
+        promos_hash = _sha256_bytes(promo_bytes)
+    elif use_samples and DEFAULT_PROMO.exists():
+        promos = load_promotions_jsonl(DEFAULT_PROMO)
+        promos_hash = _sha256_bytes(DEFAULT_PROMO.read_bytes())
+    else:
+        raise HTTPException(status_code=400, detail="Provide a promotions file or enable bundled samples.")
 
-            if pricing_file is not None:
-                price_bytes = pricing_file.getvalue()
-                suffix = Path(pricing_file.name).suffix.lower()
-                if suffix not in (".csv", ".xlsx", ".xls"):
-                    suffix = ".csv"
-                price_path = _write_temp_upload(price_bytes, suffix)
-                try:
-                    pricing = load_pricing_file(price_path)
-                finally:
-                    price_path.unlink(missing_ok=True)
-                pricing_hash = _sha256_bytes(price_bytes)
-            elif use_samples and DEFAULT_PRICE.exists():
-                pricing = load_pricing_csv(DEFAULT_PRICE)
-                pricing_hash = _sha256_bytes(DEFAULT_PRICE.read_bytes())
-            else:
-                st.error("Provide a pricing file or enable bundled samples.")
-                return
+    if pricing_file is not None:
+        price_bytes = await pricing_file.read()
+        suffix = Path(pricing_file.filename or "").suffix.lower()
+        if suffix not in (".csv", ".xlsx", ".xls"):
+            suffix = ".csv"
+        price_path = _write_temp_upload(price_bytes, suffix)
+        try:
+            pricing = load_pricing_file(price_path)
+        finally:
+            price_path.unlink(missing_ok=True)
+        pricing_hash = _sha256_bytes(price_bytes)
+    elif use_samples and DEFAULT_PRICE.exists():
+        pricing = load_pricing_csv(DEFAULT_PRICE)
+        pricing_hash = _sha256_bytes(DEFAULT_PRICE.read_bytes())
+    else:
+        raise HTTPException(status_code=400, detail="Provide a pricing file or enable bundled samples.")
 
-            if as_of.tzinfo is None:
-                as_of_utc = as_of.replace(tzinfo=timezone.utc)
-            else:
-                as_of_utc = as_of.astimezone(timezone.utc)
-
-            with st.spinner("Running deterministic engine…"):
-                conflicts = detect_conflicts(
-                    promos,
-                    pricing,
-                    channel=channel,
-                    as_of=as_of_utc,
-                    horizon_days=int(horizon_days),
-                )
-                df = conflicts_to_dataframe(conflicts)
-
-            llm_used = False
-            if use_llm_in_scan and not df.empty:
-                if not api_key:
-                    st.warning("Gemini is enabled but API key is missing. Showing deterministic results only.")
-                else:
-                    rows = df.to_dict("records")
-                    n_conf = len(rows)
-                    cap = int(max_llm_conflicts)
-                    prog = st.progress(0)
-                    gemini_status = st.empty()
-                    gemini_status.caption("Gemini: starting…")
-                    try:
-
-                        def _prog(done: int, total: int) -> None:
-                            frac = done / total if total else 0.0
-                            prog.progress(min(1.0, frac))
-                            gemini_status.caption(f"Gemini: {done}/{total} conflicts explained…")
-
-                        texts, used_model_name = batch_explain(
-                            rows,
-                            api_key=api_key,
-                            model_name=model_name,
-                            max_conflicts=cap,
-                            chunk_size=2,
-                            progress_callback=_prog,
-                        )
-                        prog.progress(1.0)
-                        gemini_status.caption("Gemini: done.")
-                        df = df.copy()
-                        df["llm_narrative"] = texts
-                        llm_used = True
-                        st.session_state["last_llm_model_used"] = used_model_name
-                        if n_conf > cap:
-                            st.warning(
-                                f"Gemini ran on the first **{cap}** of **{n_conf}** conflicts only "
-                                f"(increase “Max conflicts to send to Gemini” in the sidebar if needed). "
-                                f"The full deterministic list is still in the table and export."
-                            )
-                    except Exception as e:
-                        st.error("Gemini call failed — check API key/model and retry.")
-                        st.exception(e)
-
-            st.session_state["last_df"] = df
-            st.session_state["last_promos_hash"] = promos_hash
-            st.session_state["last_pricing_hash"] = pricing_hash
-            st.session_state["last_as_of"] = as_of_utc.isoformat()
-            st.session_state["last_llm_used"] = llm_used
-
-            audit = {
-                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-                "as_of_utc": as_of_utc.isoformat(),
-                "channel": channel,
-                "promotions_sha256": promos_hash,
-                "pricing_sha256": pricing_hash,
-                "conflict_count": int(len(df)),
-                "promotion_count": len(promos),
-                "sku_count": len(pricing),
-            }
-            _append_audit(audit)
-            st.success(
-                f"Scan complete — {len(df)} conflict(s) logged. Audit row appended to {LOGS / 'scans.jsonl'}."
-            )
-            if llm_used:
-                st.info(
-                    f"Gemini explanations generated using model "
-                    f"`{st.session_state.get('last_llm_model_used', model_name)}`."
-                )
-        except Exception as e:
-            st.exception(e)
-            return
-
-    df = st.session_state.get("last_df")
-    if df is None or df.empty:
-        if df is not None and df.empty:
-            st.write("No conflicts detected for the selected channel and as-of time.")
-        return
-
-    st.subheader("Conflict report")
-
-    display_df = st.session_state["last_df"].copy()
-
-    for _, row in display_df.iterrows():
-        sev = row.get("severity", "INFO")
-        st.markdown(
-            f"<span style='{_badge_style(sev)}'>{sev}</span> "
-            f"<strong>{row['conflict_type']}</strong> — SKU **{row.get('sku') or '—'}**",
-            unsafe_allow_html=True,
-        )
-        st.write(row["deterministic_summary"])
-        if "llm_narrative" in row and pd.notna(row["llm_narrative"]) and str(row["llm_narrative"]).strip():
-            with st.expander("LLM narrative (Gemini)", expanded=True):
-                st.write(row["llm_narrative"])
-        st.divider()
-
-    export_df = display_df.copy()
-    csv_bytes = export_df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "Export report to CSV",
-        data=csv_bytes,
-        file_name=f"promo_coherence_report_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.csv",
-        mime="text/csv",
+    conflicts = detect_conflicts(
+        promos,
+        pricing,
+        channel=channel,
+        as_of=as_of,
+        horizon_days=int(horizon_days),
     )
+    df = conflicts_to_dataframe(conflicts)
 
-    with st.expander("Audit metadata (last scan)"):
-        st.json(
-            {
-                "promotions_sha256": st.session_state.get("last_promos_hash"),
-                "pricing_sha256": st.session_state.get("last_pricing_hash"),
-                "as_of_utc": st.session_state.get("last_as_of"),
-            }
-        )
+    llm_used = False
+    llm_warning = ""
+    llm_model_used = ""
+    llm_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    llm_provider_used = llm_provider.strip().lower() or "gemini"
+    if use_llm_in_scan and not df.empty:
+        if not api_key:
+            llm_warning = "LLM is enabled but API key is missing. Showing deterministic results only."
+        else:
+            rows = df.to_dict("records")
+            cap = int(max_llm_conflicts)
+            texts, llm_model_used, llm_usage = batch_explain_with_provider(
+                rows,
+                provider=llm_provider_used,
+                api_key=api_key,
+                model_name=model_name,
+                custom_endpoint=custom_endpoint,
+                max_conflicts=cap,
+                chunk_size=2,
+            )
+            df = df.copy()
+            df["llm_narrative"] = texts
+            llm_used = True
+            if len(rows) > cap:
+                llm_warning = (
+                    f"Gemini ran on the first {cap} conflicts only. "
+                    "Increase max LLM conflicts if needed."
+                )
 
+    audit = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "as_of_utc": as_of.isoformat(),
+        "channel": channel,
+        "promotions_sha256": promos_hash,
+        "pricing_sha256": pricing_hash,
+        "conflict_count": int(len(df)),
+        "promotion_count": len(promos),
+        "sku_count": len(pricing),
+    }
+    _append_audit(audit)
 
-if __name__ == "__main__":
-    main()
+    records = df.where(pd.notna(df), None).to_dict("records")
+    return {
+        "ok": True,
+        "conflicts": records,
+        "audit": audit,
+        "llm_used": llm_used,
+        "llm_provider_used": llm_provider_used,
+        "llm_model_used": llm_model_used or model_name,
+        "llm_usage": llm_usage,
+        "llm_warning": llm_warning,
+        "scan_message": f"Scan complete - {len(records)} conflict(s) logged.",
+    }

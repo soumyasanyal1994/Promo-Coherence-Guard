@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Promo Coherence Guard</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <aside class="panel sidebar">
+      <div class="sidebar-head">
+        <h2>LLM</h2>
+        <label class="theme-toggle" title="Switch between dark and light theme">
+          <input v-model="isLightTheme" type="checkbox" @change="applyTheme" />
+          <span class="theme-track">
+            <span class="theme-thumb"></span>
+          </span>
+          <span class="theme-label">{{ isLightTheme ? 'Light' : 'Dark' }}</span>
+        </label>
+      </div>
+      <label class="field">
+        <span>LLM API key</span>
+        <input v-model="form.apiKey" type="password" placeholder="Stored in browser session only" />
+      </label>
+      <label class="field" v-if="form.llmProvider === 'gemini'">
+        <span>Custom Gemini endpoint (optional)</span>
+        <input
+          v-model.trim="form.customEndpoint"
+          type="text"
+          placeholder="e.g. https://internal-gemini.company.net/"
+        />
+      </label>
+      <label class="field">
+        <span>LLM provider</span>
+        <select v-model="form.llmProvider" @change="onProviderChange">
+          <option v-for="(providerConfig, key) in config.llm_providers" :key="key" :value="key">
+            {{ providerConfig.label }}
+          </option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Model</span>
+        <select v-model="form.modelName">
+          <option
+            v-for="model in (config.llm_providers?.[form.llmProvider]?.models || [])"
+            :key="model"
+            :value="model"
+          >
+            {{ model }}
+          </option>
+        </select>
+      </label>
+      <label class="checkbox">
+        <input v-model="form.useLlmInScan" type="checkbox" />
+        <span>Use LLM during scan</span>
+      </label>
+      <label class="field">
+        <span>Max conflicts to send to LLM</span>
+        <input v-model.number="form.maxLlmConflicts" type="number" min="1" max="200" />
+      </label>
+    </aside>
+
+    <main class="panel main">
+      <header class="hero">
+        <h1>Promo Coherence Guard</h1>
+        <p>Deterministic promotion conflicts first. LLM narratives remain advisory only.</p>
+      </header>
+
+      <section class="meta-grid">
+        <div class="meta-card">
+          <p class="meta-title">MVP conflict types</p>
+          <p class="meta-value">{{ config.taxonomy_count }}</p>
+        </div>
+        <div class="meta-card">
+          <p class="meta-title">Guidance</p>
+          <p>Upload promotions JSONL and pricing CSV/Excel, or use bundled samples.</p>
+        </div>
+      </section>
+
+      <section class="form-grid">
+        <label class="field">
+          <span>Channel for pricing simulation</span>
+          <select v-model="form.channel">
+            <option v-for="channel in config.channels" :key="channel" :value="channel">{{ channel }}</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>As-of (UTC)</span>
+          <input v-model="form.asOfUtc" type="datetime-local" />
+        </label>
+        <label class="field">
+          <span>Clearance horizon (days)</span>
+          <input v-model.number="form.horizonDays" type="number" min="1" max="90" />
+        </label>
+        <label class="checkbox">
+          <input v-model="form.useSamples" type="checkbox" />
+          <span>Use bundled sample data if no upload</span>
+        </label>
+      </section>
+
+      <section class="upload-grid">
+        <label class="field">
+          <span>Promotions (JSONL)</span>
+          <input type="file" accept=".jsonl,.txt" @change="onPromosUpload" />
+        </label>
+        <label class="field">
+          <span>Product pricing (CSV or Excel)</span>
+          <input type="file" accept=".csv,.xlsx,.xls" @change="onPricingUpload" />
+        </label>
+      </section>
+
+      <button class="primary-btn" :disabled="isRunning" @click="runScan">
+        {{ isRunning ? 'Running scan...' : 'Run conflict scan' }}
+      </button>
+
+      <div v-if="showProgress" class="progress-wrap" role="status" aria-live="polite">
+        <div class="progress-track">
+          <div :class="['progress-fill', isRunning ? 'running' : 'done']"></div>
+        </div>
+        <p class="progress-text">{{ isRunning ? 'Scan in progress...' : 'Done' }}</p>
+      </div>
+
+      <p v-if="message" class="message info">{{ message }}</p>
+      <p v-if="error" class="message error">{{ error }}</p>
+      <p v-if="llmWarning" class="message warn">{{ llmWarning }}</p>
+      <p v-if="llmUsage && llmUsage.total_tokens > 0" class="message info">
+        Token usage - Input: {{ llmUsage.input_tokens }}, Output: {{ llmUsage.output_tokens }}, Total: {{ llmUsage.total_tokens }}
+      </p>
+
+      <section v-if="conflicts.length" class="results">
+        <div class="results-head">
+          <h2>Conflict report</h2>
+          <button class="secondary-btn" @click="downloadPdf">Export report to PDF</button>
+        </div>
+
+        <article v-for="(row, idx) in conflicts" :key="idx" class="result-card">
+          <div class="result-top">
+            <span :class="['severity-badge', severityClass(row.severity)]">{{ row.severity || 'INFO' }}</span>
+            <strong>{{ row.conflict_type }}</strong>
+            <span>SKU {{ row.sku || '—' }}</span>
+          </div>
+          <p>{{ row.deterministic_summary }}</p>
+          <details v-if="row.llm_narrative">
+            <summary>LLM narrative</summary>
+            <p>{{ row.llm_narrative }}</p>
+          </details>
+        </article>
+
+        <details class="audit-box">
+          <summary>Audit metadata (last scan)</summary>
+          <pre>{{ JSON.stringify(audit, null, 2) }}</pre>
+        </details>
+      </section>
+
+      <p v-else-if="scanCompleted" class="empty">No conflicts detected for the selected channel and as-of time.</p>
+    </main>
+  </div>
+
+  <script src="/static/main.js"></script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-"""Optional Gemini narrative layer — explanations only; conflicts remain rule-based."""
+"""Optional LLM narrative layer — explanations only; conflicts remain rule-based."""
 from __future__ import annotations
 
 import json
@@ -6,6 +6,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+import anthropic
 import google.generativeai as genai
 from google.generativeai.types import HarmBlockThreshold, HarmCategory
 
@@ -50,6 +51,9 @@ what happens at till/online, commercial risk, and 1–2 remediation steps.
 Treat evidence as fact. Do not invent SKUs or prices.
 Start with one line that echoes the severity label.
 No markdown code fences. Plain text only."""
+
+
+CLAUDE_HAIKU_MODEL = "claude-3-5-haiku-20241022"
 
 
 def _evidence_from_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -186,6 +190,26 @@ def _generate(model: genai.GenerativeModel, prompt: str) -> Any:
     )
 
 
+def _gemini_usage_from_resp(resp: Any) -> dict[str, int]:
+    meta = getattr(resp, "usage_metadata", None)
+    if meta is None:
+        return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    inp = int(getattr(meta, "prompt_token_count", 0) or 0)
+    out = int(getattr(meta, "candidates_token_count", 0) or 0)
+    total = int(getattr(meta, "total_token_count", inp + out) or (inp + out))
+    return {"input_tokens": inp, "output_tokens": out, "total_tokens": total}
+
+
+def _zero_usage() -> dict[str, int]:
+    return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+
+
+def _add_usage(acc: dict[str, int], inc: dict[str, int]) -> None:
+    acc["input_tokens"] += int(inc.get("input_tokens", 0) or 0)
+    acc["output_tokens"] += int(inc.get("output_tokens", 0) or 0)
+    acc["total_tokens"] += int(inc.get("total_tokens", 0) or 0)
+
+
 def _normalize_model_name(name: str) -> str:
     n = (name or "").strip()
     if not n:
@@ -237,11 +261,12 @@ def _resolve_model_name(requested_model: str) -> str:
 def _explain_chunk_delimited(
     model: genai.GenerativeModel,
     chunk_rows: list[dict[str, Any]],
-) -> list[str]:
+) -> tuple[list[str], dict[str, int]]:
     conflicts_payload = [_compact_row_for_llm(r) for r in chunk_rows]
     user_text = json.dumps({"conflicts": conflicts_payload}, default=str)
     prompt = BATCH_SYSTEM + "\n\n" + user_text
     resp = _generate(model, prompt)
+    usage = _gemini_usage_from_resp(resp)
     raw = _response_text(resp)
     if not raw:
         fr = _finish_reason(resp)
@@ -253,10 +278,10 @@ def _explain_chunk_delimited(
             detail.append(f"prompt_block={br}")
         msg = "; ".join(detail) if detail else "no candidates returned"
         raise ValueError(f"Empty model body ({msg})")
-    return _parse_delimited_batch(raw, len(chunk_rows))
+    return _parse_delimited_batch(raw, len(chunk_rows)), usage
 
 
-def _explain_one_plain(model: genai.GenerativeModel, row: dict[str, Any]) -> str:
+def _explain_one_plain(model: genai.GenerativeModel, row: dict[str, Any]) -> tuple[str, dict[str, int]]:
     c = _compact_row_for_llm(row)
     body = (
         f"conflict_type: {c['conflict_type']}\n"
@@ -277,7 +302,7 @@ def _explain_one_plain(model: genai.GenerativeModel, row: dict[str, Any]) -> str
             parts.append(f"prompt_block={br}")
         msg = "; ".join(parts) or "unknown"
         raise ValueError(f"Empty model body ({msg})")
-    return raw.strip()
+    return raw.strip(), _gemini_usage_from_resp(resp)
 
 
 def _fallback_narrative(row: dict[str, Any], err: str | None) -> str:
@@ -292,28 +317,34 @@ def _fallback_narrative(row: dict[str, Any], err: str | None) -> str:
     )
 
 
-def batch_explain(
+def _batch_explain_gemini(
     rows: list[dict[str, Any]],
     *,
     api_key: str,
     model_name: str,
+    custom_endpoint: str = "",
     max_conflicts: int = 35,
     chunk_size: int = 2,
     progress_callback: Callable[[int, int], None] | None = None,
-) -> tuple[list[str], str]:
+) -> tuple[list[str], str, dict[str, int]]:
     """
     Generate Gemini narratives for up to ``max_conflicts`` rows (rest get empty string).
     Delimiter batches with per-row plain-text fallback and a deterministic echo if both fail.
     """
     n = len(rows)
     out: list[str] = [""] * n
+    usage = _zero_usage()
     if n == 0:
-        return out, model_name
+        return out, model_name, usage
 
     limit = min(n, max(1, max_conflicts))
     work = rows[:limit]
 
-    genai.configure(api_key=api_key)
+    endpoint = (custom_endpoint or "").strip()
+    if endpoint:
+        genai.configure(api_key=api_key, client_options={"api_endpoint": endpoint})
+    else:
+        genai.configure(api_key=api_key)
     resolved_model_name = _resolve_model_name(model_name)
     model = genai.GenerativeModel(resolved_model_name)
     chunk_size = max(1, min(chunk_size, 3))
@@ -323,12 +354,15 @@ def batch_explain(
         chunk = work[start : start + chunk_size]
         texts: list[str] = []
         try:
-            texts = _explain_chunk_delimited(model, chunk)
+            texts, chunk_usage = _explain_chunk_delimited(model, chunk)
+            _add_usage(usage, chunk_usage)
         except Exception as chunk_err:
             chunk_err_s = str(chunk_err)[:300]
             for row in chunk:
                 try:
-                    texts.append(_explain_one_plain(model, row))
+                    txt, row_usage = _explain_one_plain(model, row)
+                    texts.append(txt)
+                    _add_usage(usage, row_usage)
                 except Exception as row_err:
                     texts.append(_fallback_narrative(row, str(row_err)[:200] or chunk_err_s))
         for i, txt in enumerate(texts):
@@ -337,4 +371,127 @@ def batch_explain(
         if progress_callback:
             progress_callback(done, limit)
 
-    return out, resolved_model_name
+    return out, resolved_model_name, usage
+
+
+def _claude_message(
+    client: anthropic.Anthropic,
+    model_name: str,
+    prompt: str,
+) -> Any:
+    return client.messages.create(
+        model=model_name,
+        max_tokens=1200,
+        temperature=0.2,
+        system=BATCH_SYSTEM,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+
+def _claude_usage(resp: Any) -> dict[str, int]:
+    u = getattr(resp, "usage", None)
+    if u is None:
+        return _zero_usage()
+    inp = int(getattr(u, "input_tokens", 0) or 0)
+    out = int(getattr(u, "output_tokens", 0) or 0)
+    return {"input_tokens": inp, "output_tokens": out, "total_tokens": inp + out}
+
+
+def _claude_text(resp: Any) -> str:
+    blocks = getattr(resp, "content", None) or []
+    text_parts = []
+    for b in blocks:
+        if getattr(b, "type", "") == "text":
+            text_parts.append(getattr(b, "text", ""))
+    return "".join(text_parts).strip()
+
+
+def _batch_explain_claude(
+    rows: list[dict[str, Any]],
+    *,
+    api_key: str,
+    model_name: str,
+    max_conflicts: int = 35,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> tuple[list[str], str, dict[str, int]]:
+    n = len(rows)
+    out: list[str] = [""] * n
+    usage = _zero_usage()
+    if n == 0:
+        return out, model_name, usage
+
+    client = anthropic.Anthropic(api_key=api_key)
+    limit = min(n, max(1, max_conflicts))
+    done = 0
+    for i in range(limit):
+        row = rows[i]
+        payload = _compact_row_for_llm(row)
+        prompt = json.dumps({"conflicts": [payload]}, default=str)
+        try:
+            resp = _claude_message(client, model_name, prompt)
+            text = _claude_text(resp)
+            if not text:
+                text = _fallback_narrative(row, "empty Claude response")
+            out[i] = text
+            _add_usage(usage, _claude_usage(resp))
+        except Exception as exc:
+            out[i] = _fallback_narrative(row, str(exc)[:200])
+        done += 1
+        if progress_callback:
+            progress_callback(done, limit)
+    return out, model_name, usage
+
+
+def batch_explain_with_provider(
+    rows: list[dict[str, Any]],
+    *,
+    provider: str,
+    api_key: str,
+    model_name: str,
+    custom_endpoint: str = "",
+    max_conflicts: int = 35,
+    chunk_size: int = 2,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> tuple[list[str], str, dict[str, int]]:
+    provider_key = (provider or "gemini").strip().lower()
+    if provider_key == "claude":
+        selected = model_name or CLAUDE_HAIKU_MODEL
+        return _batch_explain_claude(
+            rows,
+            api_key=api_key,
+            model_name=selected,
+            max_conflicts=max_conflicts,
+            progress_callback=progress_callback,
+        )
+    return _batch_explain_gemini(
+        rows,
+        api_key=api_key,
+        model_name=model_name,
+        custom_endpoint=custom_endpoint,
+        max_conflicts=max_conflicts,
+        chunk_size=chunk_size,
+        progress_callback=progress_callback,
+    )
+
+
+def batch_explain(
+    rows: list[dict[str, Any]],
+    *,
+    api_key: str,
+    model_name: str,
+    custom_endpoint: str = "",
+    max_conflicts: int = 35,
+    chunk_size: int = 2,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> tuple[list[str], str]:
+    texts, used_model, _ = batch_explain_with_provider(
+        rows,
+        provider="gemini",
+        api_key=api_key,
+        model_name=model_name,
+        custom_endpoint=custom_endpoint,
+        max_conflicts=max_conflicts,
+        chunk_size=chunk_size,
+        progress_callback=progress_callback,
+    )
+    return texts, used_model
