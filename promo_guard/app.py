@@ -32,6 +32,7 @@ STATIC_DIR = ROOT / "promo_guard" / "static"
 DEMO_AS_OF = datetime(2026, 11, 29, 12, 0, 0, tzinfo=timezone.utc)
 
 GEMINI_MODELS = [
+    "gemini-2.5-flash",
     "gemini-2.0-flash",
     "gemini-2.0-flash-lite",
     "gemini-1.5-flash",
@@ -119,7 +120,7 @@ async def scan(
     llm_provider: str = Form("gemini"),
     api_key: str = Form(""),
     custom_endpoint: str = Form(""),
-    model_name: str = Form("gemini-2.0-flash"),
+    model_name: str = Form("gemini-2.5-flash"),
     max_llm_conflicts: int = Form(35),
     promos_file: UploadFile | None = File(None),
     pricing_file: UploadFile | None = File(None),

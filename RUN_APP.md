@@ -53,13 +53,12 @@ chmod +x startup.sh
 - `RELOAD` (`1` to enable auto-reload)
 - `GENERATE_SAMPLE_DATA` (`1` to regenerate bundled sample data)
 
-## Docker run
+## Run mode for this project
 
-```bash
-cd "<project-root>"
-docker build -t promo-coherence-guard .
-docker run --rm -p 8501:8501 --name promo-coherence-guard promo-coherence-guard
-```
+Use local startup scripts only (no Docker):
+
+- Windows: `startup.bat`
+- macOS/Linux: `startup.sh`
 
 ## Custom Gemini endpoint (corporate/internal)
 
@@ -67,6 +66,11 @@ In the UI sidebar, when provider is **Google Gemini**, you can set **Custom Gemi
 
 - If provided, scans use that endpoint.
 - If empty, scans use the default public Gemini endpoint.
+- For LiteLLM/OpenAI-compatible proxies, use one of these endpoint styles:
+  - `http://localhost:4000`
+  - `https://<your-proxy-host>/v1`
+  - `https://<your-proxy-host>/v1/chat/completions`
+- Custom endpoint requests now use explicit timeouts to avoid long "pending" scans.
 
 ## Audit log
 

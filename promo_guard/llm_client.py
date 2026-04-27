@@ -8,6 +8,7 @@ from typing import Any
 
 import anthropic
 import google.generativeai as genai
+import requests
 from google.generativeai.types import HarmBlockThreshold, HarmCategory
 
 
@@ -187,6 +188,7 @@ def _generate(model: genai.GenerativeModel, prompt: str) -> Any:
         prompt,
         generation_config=_gen_config(),
         safety_settings=_RETAIL_SAFETY,
+        request_options={"timeout": 45},
     )
 
 
@@ -245,9 +247,11 @@ def _resolve_model_name(requested_model: str) -> str:
         return f"models/{req_norm}"
 
     preferred = [
+        "models/gemini-2.5-flash",
         "models/gemini-2.0-flash",
         "models/gemini-2.0-flash-lite",
         "models/gemini-1.5-flash",
+        "gemini-2.5-flash",
         "gemini-2.0-flash",
         "gemini-2.0-flash-lite",
         "gemini-1.5-flash",
@@ -317,6 +321,131 @@ def _fallback_narrative(row: dict[str, Any], err: str | None) -> str:
     )
 
 
+def _normalize_endpoint_for_chat(base: str) -> str:
+    b = (base or "").strip().rstrip("/")
+    if not b:
+        return ""
+    if b.endswith("/chat/completions"):
+        return b
+    if b.endswith("/v1"):
+        return f"{b}/chat/completions"
+    return f"{b}/v1/chat/completions"
+
+
+def _openai_compat_chat_completion(
+    *,
+    endpoint: str,
+    api_key: str,
+    model_name: str,
+    system_prompt: str,
+    user_prompt: str,
+    timeout_seconds: int = 45,
+) -> tuple[str, dict[str, int]]:
+    url = _normalize_endpoint_for_chat(endpoint)
+    if not url:
+        raise ValueError("Custom endpoint is empty.")
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.2,
+    }
+    resp = requests.post(url, headers=headers, json=payload, timeout=timeout_seconds)
+    resp.raise_for_status()
+    body = resp.json()
+    choices = body.get("choices") or []
+    if not choices:
+        raise ValueError("No choices in custom endpoint response.")
+    msg = choices[0].get("message") or {}
+    content = msg.get("content", "")
+    if isinstance(content, list):
+        # Some providers return content blocks.
+        text_parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                text_parts.append(str(part.get("text", "")))
+            else:
+                text_parts.append(str(part))
+        text = "".join(text_parts).strip()
+    else:
+        text = str(content).strip()
+    if not text:
+        raise ValueError("Empty text from custom endpoint.")
+    usage_raw = body.get("usage") or {}
+    inp = int(usage_raw.get("prompt_tokens", 0) or 0)
+    out = int(usage_raw.get("completion_tokens", 0) or 0)
+    total = int(usage_raw.get("total_tokens", inp + out) or (inp + out))
+    return text, {"input_tokens": inp, "output_tokens": out, "total_tokens": total}
+
+
+def _batch_explain_custom_endpoint(
+    rows: list[dict[str, Any]],
+    *,
+    api_key: str,
+    model_name: str,
+    custom_endpoint: str,
+    max_conflicts: int = 35,
+    chunk_size: int = 2,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> tuple[list[str], str, dict[str, int]]:
+    n = len(rows)
+    out: list[str] = [""] * n
+    usage = _zero_usage()
+    if n == 0:
+        return out, model_name, usage
+
+    limit = min(n, max(1, max_conflicts))
+    work = rows[:limit]
+    chunk_size = max(1, min(chunk_size, 3))
+    done = 0
+
+    for start in range(0, len(work), chunk_size):
+        chunk = work[start : start + chunk_size]
+        conflicts_payload = [_compact_row_for_llm(r) for r in chunk]
+        user_text = json.dumps({"conflicts": conflicts_payload}, default=str)
+        texts: list[str] = []
+        try:
+            raw, chunk_usage = _openai_compat_chat_completion(
+                endpoint=custom_endpoint,
+                api_key=api_key,
+                model_name=model_name,
+                system_prompt=BATCH_SYSTEM,
+                user_prompt=user_text,
+            )
+            texts = _parse_delimited_batch(raw, len(chunk))
+            _add_usage(usage, chunk_usage)
+        except Exception as chunk_err:
+            chunk_err_s = str(chunk_err)[:300]
+            for row in chunk:
+                try:
+                    payload = _compact_row_for_llm(row)
+                    single_prompt = json.dumps({"conflicts": [payload]}, default=str)
+                    raw_one, row_usage = _openai_compat_chat_completion(
+                        endpoint=custom_endpoint,
+                        api_key=api_key,
+                        model_name=model_name,
+                        system_prompt=SINGLE_SYSTEM,
+                        user_prompt=single_prompt,
+                    )
+                    texts.append(raw_one)
+                    _add_usage(usage, row_usage)
+                except Exception as row_err:
+                    texts.append(_fallback_narrative(row, str(row_err)[:200] or chunk_err_s))
+        for i, txt in enumerate(texts):
+            out[start + i] = txt
+        done += len(chunk)
+        if progress_callback:
+            progress_callback(done, limit)
+
+    return out, model_name, usage
+
+
 def _batch_explain_gemini(
     rows: list[dict[str, Any]],
     *,
@@ -342,9 +471,19 @@ def _batch_explain_gemini(
 
     endpoint = (custom_endpoint or "").strip()
     if endpoint:
-        genai.configure(api_key=api_key, client_options={"api_endpoint": endpoint})
-    else:
-        genai.configure(api_key=api_key)
+        # Custom endpoints (for example LiteLLM proxy) are typically OpenAI-compatible.
+        # Use direct HTTP with explicit timeout to avoid hanging SDK calls.
+        return _batch_explain_custom_endpoint(
+            rows,
+            api_key=api_key,
+            model_name=model_name,
+            custom_endpoint=endpoint,
+            max_conflicts=max_conflicts,
+            chunk_size=chunk_size,
+            progress_callback=progress_callback,
+        )
+
+    genai.configure(api_key=api_key)
     resolved_model_name = _resolve_model_name(model_name)
     model = genai.GenerativeModel(resolved_model_name)
     chunk_size = max(1, min(chunk_size, 3))
