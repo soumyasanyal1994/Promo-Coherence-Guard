@@ -120,6 +120,7 @@ async def scan(
     llm_provider: str = Form("gemini"),
     api_key: str = Form(""),
     custom_endpoint: str = Form(""),
+    verify_custom_ssl: bool = Form(True),
     model_name: str = Form("gemini-2.5-flash"),
     max_llm_conflicts: int = Form(35),
     promos_file: UploadFile | None = File(None),
@@ -187,6 +188,7 @@ async def scan(
                 api_key=api_key,
                 model_name=model_name,
                 custom_endpoint=custom_endpoint,
+                verify_custom_ssl=verify_custom_ssl,
                 max_conflicts=cap,
                 chunk_size=2,
             )

@@ -14,6 +14,7 @@ createApp({
         llmProvider: "gemini",
         apiKey: "",
         customEndpoint: "",
+        verifyCustomSsl: true,
         modelName: "gemini-2.0-flash",
         useLlmInScan: true,
         maxLlmConflicts: 35,
@@ -58,6 +59,7 @@ createApp({
       }
       if (this.form.llmProvider !== "gemini") {
         this.form.customEndpoint = "";
+        this.form.verifyCustomSsl = true;
       }
     },
     toLocalInput(iso) {
@@ -95,6 +97,7 @@ createApp({
         body.append("llm_provider", this.form.llmProvider);
         body.append("api_key", this.form.apiKey);
         body.append("custom_endpoint", this.form.customEndpoint || "");
+        body.append("verify_custom_ssl", String(this.form.verifyCustomSsl));
         body.append("model_name", this.form.modelName);
         body.append("max_llm_conflicts", String(this.form.maxLlmConflicts));
         if (this.promosFile) {

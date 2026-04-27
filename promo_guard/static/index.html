@@ -33,6 +33,10 @@
           placeholder="e.g. https://internal-gemini.company.net/"
         />
       </label>
+      <label class="checkbox" v-if="form.llmProvider === 'gemini' && form.customEndpoint">
+        <input v-model="form.verifyCustomSsl" type="checkbox" />
+        <span>Verify custom endpoint SSL certificate</span>
+      </label>
       <label class="field">
         <span>LLM provider</span>
         <select v-model="form.llmProvider" @change="onProviderChange">

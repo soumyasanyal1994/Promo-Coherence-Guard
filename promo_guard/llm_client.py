@@ -313,11 +313,19 @@ def _fallback_narrative(row: dict[str, Any], err: str | None) -> str:
     sev = row.get("severity", "")
     summ = row.get("deterministic_summary", "")
     tail = f" (API detail: {err})" if err else ""
+    extra_hint = ""
+    low = (err or "").lower()
+    if "certificate_verify_failed" in low or "sslcertverificationerror" in low:
+        extra_hint = (
+            " The custom endpoint SSL certificate is not trusted by this runtime. "
+            "If this is an internal endpoint with self-signed/private CA cert, "
+            "set 'Verify custom endpoint SSL certificate' to off in the UI."
+        )
     return (
         f"{sev} — automated narrative fallback (Gemini returned no text). "
         f"{summ} "
         f"Use this deterministic finding as the source of truth; try model **gemini-1.5-flash** "
-        f"or reduce “Max conflicts to send to Gemini” if the API was overloaded.{tail}"
+        f"or reduce “Max conflicts to send to Gemini” if the API was overloaded.{tail}{extra_hint}"
     )
 
 
@@ -339,6 +347,7 @@ def _openai_compat_chat_completion(
     model_name: str,
     system_prompt: str,
     user_prompt: str,
+    verify_ssl: bool = True,
     timeout_seconds: int = 45,
 ) -> tuple[str, dict[str, int]]:
     url = _normalize_endpoint_for_chat(endpoint)
@@ -356,7 +365,13 @@ def _openai_compat_chat_completion(
         ],
         "temperature": 0.2,
     }
-    resp = requests.post(url, headers=headers, json=payload, timeout=timeout_seconds)
+    resp = requests.post(
+        url,
+        headers=headers,
+        json=payload,
+        timeout=timeout_seconds,
+        verify=verify_ssl,
+    )
     resp.raise_for_status()
     body = resp.json()
     choices = body.get("choices") or []
@@ -390,6 +405,7 @@ def _batch_explain_custom_endpoint(
     api_key: str,
     model_name: str,
     custom_endpoint: str,
+    verify_custom_ssl: bool = True,
     max_conflicts: int = 35,
     chunk_size: int = 2,
     progress_callback: Callable[[int, int], None] | None = None,
@@ -417,6 +433,7 @@ def _batch_explain_custom_endpoint(
                 model_name=model_name,
                 system_prompt=BATCH_SYSTEM,
                 user_prompt=user_text,
+                verify_ssl=verify_custom_ssl,
             )
             texts = _parse_delimited_batch(raw, len(chunk))
             _add_usage(usage, chunk_usage)
@@ -432,6 +449,7 @@ def _batch_explain_custom_endpoint(
                         model_name=model_name,
                         system_prompt=SINGLE_SYSTEM,
                         user_prompt=single_prompt,
+                        verify_ssl=verify_custom_ssl,
                     )
                     texts.append(raw_one)
                     _add_usage(usage, row_usage)
@@ -452,6 +470,7 @@ def _batch_explain_gemini(
     api_key: str,
     model_name: str,
     custom_endpoint: str = "",
+    verify_custom_ssl: bool = True,
     max_conflicts: int = 35,
     chunk_size: int = 2,
     progress_callback: Callable[[int, int], None] | None = None,
@@ -478,6 +497,7 @@ def _batch_explain_gemini(
             api_key=api_key,
             model_name=model_name,
             custom_endpoint=endpoint,
+            verify_custom_ssl=verify_custom_ssl,
             max_conflicts=max_conflicts,
             chunk_size=chunk_size,
             progress_callback=progress_callback,
@@ -588,6 +608,7 @@ def batch_explain_with_provider(
     api_key: str,
     model_name: str,
     custom_endpoint: str = "",
+    verify_custom_ssl: bool = True,
     max_conflicts: int = 35,
     chunk_size: int = 2,
     progress_callback: Callable[[int, int], None] | None = None,
@@ -607,6 +628,7 @@ def batch_explain_with_provider(
         api_key=api_key,
         model_name=model_name,
         custom_endpoint=custom_endpoint,
+        verify_custom_ssl=verify_custom_ssl,
         max_conflicts=max_conflicts,
         chunk_size=chunk_size,
         progress_callback=progress_callback,
@@ -619,6 +641,7 @@ def batch_explain(
     api_key: str,
     model_name: str,
     custom_endpoint: str = "",
+    verify_custom_ssl: bool = True,
     max_conflicts: int = 35,
     chunk_size: int = 2,
     progress_callback: Callable[[int, int], None] | None = None,
@@ -629,6 +652,7 @@ def batch_explain(
         api_key=api_key,
         model_name=model_name,
         custom_endpoint=custom_endpoint,
+        verify_custom_ssl=verify_custom_ssl,
         max_conflicts=max_conflicts,
         chunk_size=chunk_size,
         progress_callback=progress_callback,
