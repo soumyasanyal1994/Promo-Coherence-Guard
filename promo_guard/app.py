@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -43,6 +44,13 @@ GEMINI_MODELS = [
 
 def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _write_temp_upload(data: bytes, suffix: str) -> Path:
+    """Write upload bytes to the OS temp dir (works on Windows; /tmp does not)."""
+    with tempfile.NamedTemporaryFile(delete=False, prefix="pcg_", suffix=suffix) as tf:
+        tf.write(data)
+        return Path(tf.name)
 
 
 def _badge_style(sev: str) -> str:
@@ -116,9 +124,11 @@ def main() -> None:
         try:
             if promos_file is not None:
                 promo_bytes = promos_file.getvalue()
-                promos_path = Path("/tmp/pcg_upload_promos.jsonl")
-                promos_path.write_bytes(promo_bytes)
-                promos = load_promotions_jsonl(promos_path)
+                promos_path = _write_temp_upload(promo_bytes, ".jsonl")
+                try:
+                    promos = load_promotions_jsonl(promos_path)
+                finally:
+                    promos_path.unlink(missing_ok=True)
                 promos_hash = _sha256_bytes(promo_bytes)
             elif use_samples and DEFAULT_PROMO.exists():
                 promos = load_promotions_jsonl(DEFAULT_PROMO)
@@ -132,9 +142,11 @@ def main() -> None:
                 suffix = Path(pricing_file.name).suffix.lower()
                 if suffix not in (".csv", ".xlsx", ".xls"):
                     suffix = ".csv"
-                price_path = Path(f"/tmp/pcg_upload_pricing{suffix}")
-                price_path.write_bytes(price_bytes)
-                pricing = load_pricing_file(price_path)
+                price_path = _write_temp_upload(price_bytes, suffix)
+                try:
+                    pricing = load_pricing_file(price_path)
+                finally:
+                    price_path.unlink(missing_ok=True)
                 pricing_hash = _sha256_bytes(price_bytes)
             elif use_samples and DEFAULT_PRICE.exists():
                 pricing = load_pricing_csv(DEFAULT_PRICE)
