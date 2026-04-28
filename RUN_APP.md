@@ -71,6 +71,8 @@ In the UI sidebar, when provider is **Google Gemini**, you can set **Custom Gemi
   - `https://<your-proxy-host>/v1`
   - `https://<your-proxy-host>/v1/chat/completions`
 - Custom endpoint requests now use explicit timeouts to avoid long "pending" scans.
+- **SSL**: Python `requests` verifies certificates by default. Internal LiteLLM hosts often use a corporate CA that Node bypasses with `https.Agent({ rejectUnauthorized: false })`. This app defaults to **not** verifying TLS for custom endpoints (same idea); enable **Verify SSL for custom endpoint** in the UI once your machine trusts the server certificate (or install the org CA).
+- **Auth**: LiteLLM proxies often expect **`x-litellm-api-key`** instead of `Authorization: Bearer`. In the UI, set **Custom endpoint auth** to `x-litellm-api-key (LiteLLM proxy)` and paste the same key you use in axios.
 
 ## Audit log
 

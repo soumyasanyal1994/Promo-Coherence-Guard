@@ -9,12 +9,14 @@ createApp({
         },
         channels: ["web", "app", "pos"],
         taxonomy_count: 0,
+        custom_endpoint_auth: [],
       },
       form: {
         llmProvider: "gemini",
         apiKey: "",
         customEndpoint: "",
-        verifyCustomSsl: true,
+        customApiAuth: "bearer",
+        verifyCustomSsl: false,
         modelName: "gemini-2.0-flash",
         useLlmInScan: true,
         maxLlmConflicts: 35,
@@ -42,6 +44,12 @@ createApp({
       const resp = await fetch("/api/config");
       const payload = await resp.json();
       this.config = payload;
+      if (!this.config.custom_endpoint_auth?.length) {
+        this.config.custom_endpoint_auth = [
+          { value: "bearer", label: "Authorization: Bearer (default)" },
+          { value: "litellm", label: "x-litellm-api-key (LiteLLM proxy)" },
+        ];
+      }
       const provider = this.form.llmProvider;
       const providerConfig = payload.llm_providers?.[provider];
       if (providerConfig?.models?.length) {
@@ -59,7 +67,8 @@ createApp({
       }
       if (this.form.llmProvider !== "gemini") {
         this.form.customEndpoint = "";
-        this.form.verifyCustomSsl = true;
+        this.form.verifyCustomSsl = false;
+        this.form.customApiAuth = "bearer";
       }
     },
     toLocalInput(iso) {
@@ -98,6 +107,7 @@ createApp({
         body.append("api_key", this.form.apiKey);
         body.append("custom_endpoint", this.form.customEndpoint || "");
         body.append("verify_custom_ssl", String(this.form.verifyCustomSsl));
+        body.append("custom_api_auth", this.form.customApiAuth || "bearer");
         body.append("model_name", this.form.modelName);
         body.append("max_llm_conflicts", String(this.form.maxLlmConflicts));
         if (this.promosFile) {

@@ -67,6 +67,20 @@ def _normalize_utc_iso(as_of: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def _parse_form_bool(value: str | bool | None, *, default: bool) -> bool:
+    """Multipart form sends booleans as strings; coerce reliably (FastAPI can mis-coerce)."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    s = str(value).strip().lower()
+    if s in ("false", "0", "no", "off", ""):
+        return False
+    if s in ("true", "1", "yes", "on"):
+        return True
+    return default
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
@@ -103,6 +117,10 @@ def config() -> dict[str, Any]:
             "gemini": {"label": "Google Gemini", "models": GEMINI_MODELS},
             "claude": {"label": "Anthropic Claude", "models": CLAUDE_MODELS},
         },
+        "custom_endpoint_auth": [
+            {"value": "bearer", "label": "Authorization: Bearer (OpenAI / default)"},
+            {"value": "litellm", "label": "x-litellm-api-key (LiteLLM proxy)"},
+        ],
         "channels": ["web", "app", "pos"],
         "default_as_of_utc": DEMO_AS_OF.isoformat(),
         "default_horizon_days": 7,
@@ -120,7 +138,8 @@ async def scan(
     llm_provider: str = Form("gemini"),
     api_key: str = Form(""),
     custom_endpoint: str = Form(""),
-    verify_custom_ssl: bool = Form(True),
+    verify_custom_ssl: str = Form("false"),
+    custom_api_auth: str = Form("bearer"),
     model_name: str = Form("gemini-2.5-flash"),
     max_llm_conflicts: int = Form(35),
     promos_file: UploadFile | None = File(None),
@@ -130,6 +149,11 @@ async def scan(
         as_of = _normalize_utc_iso(as_of_utc)
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid as-of datetime.") from exc
+
+    verify_ssl_for_custom = _parse_form_bool(verify_custom_ssl, default=False)
+    auth_mode = (custom_api_auth or "bearer").strip().lower()
+    if auth_mode not in ("bearer", "litellm"):
+        auth_mode = "bearer"
 
     if promos_file is not None:
         promo_bytes = await promos_file.read()
@@ -188,7 +212,8 @@ async def scan(
                 api_key=api_key,
                 model_name=model_name,
                 custom_endpoint=custom_endpoint,
-                verify_custom_ssl=verify_custom_ssl,
+                verify_custom_ssl=verify_ssl_for_custom,
+                custom_api_auth=auth_mode,
                 max_conflicts=cap,
                 chunk_size=2,
             )

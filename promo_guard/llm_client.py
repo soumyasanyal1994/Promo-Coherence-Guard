@@ -9,6 +9,7 @@ from typing import Any
 import anthropic
 import google.generativeai as genai
 import requests
+import urllib3
 from google.generativeai.types import HarmBlockThreshold, HarmCategory
 
 
@@ -329,6 +330,17 @@ def _fallback_narrative(row: dict[str, Any], err: str | None) -> str:
     )
 
 
+def _custom_endpoint_auth_headers(api_key: str, *, auth: str) -> dict[str, str]:
+    """OpenAI-compatible proxies: Bearer (default) or LiteLLM virtual-key header."""
+    a = (auth or "bearer").strip().lower().replace(" ", "")
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if a in ("litellm", "x-litellm-api-key", "xlitellmapikey"):
+        headers["x-litellm-api-key"] = api_key
+    else:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
 def _normalize_endpoint_for_chat(base: str) -> str:
     b = (base or "").strip().rstrip("/")
     if not b:
@@ -348,15 +360,15 @@ def _openai_compat_chat_completion(
     system_prompt: str,
     user_prompt: str,
     verify_ssl: bool = True,
+    custom_auth: str = "bearer",
     timeout_seconds: int = 45,
 ) -> tuple[str, dict[str, int]]:
     url = _normalize_endpoint_for_chat(endpoint)
     if not url:
         raise ValueError("Custom endpoint is empty.")
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    if not verify_ssl:
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    headers = _custom_endpoint_auth_headers(api_key, auth=custom_auth)
     payload = {
         "model": model_name,
         "messages": [
@@ -365,6 +377,7 @@ def _openai_compat_chat_completion(
         ],
         "temperature": 0.2,
     }
+    # verify_ssl=False disables TLS cert verification (same as requests verify=False / Node rejectUnauthorized: false).
     resp = requests.post(
         url,
         headers=headers,
@@ -406,6 +419,7 @@ def _batch_explain_custom_endpoint(
     model_name: str,
     custom_endpoint: str,
     verify_custom_ssl: bool = True,
+    custom_auth: str = "bearer",
     max_conflicts: int = 35,
     chunk_size: int = 2,
     progress_callback: Callable[[int, int], None] | None = None,
@@ -434,6 +448,7 @@ def _batch_explain_custom_endpoint(
                 system_prompt=BATCH_SYSTEM,
                 user_prompt=user_text,
                 verify_ssl=verify_custom_ssl,
+                custom_auth=custom_auth,
             )
             texts = _parse_delimited_batch(raw, len(chunk))
             _add_usage(usage, chunk_usage)
@@ -450,6 +465,7 @@ def _batch_explain_custom_endpoint(
                         system_prompt=SINGLE_SYSTEM,
                         user_prompt=single_prompt,
                         verify_ssl=verify_custom_ssl,
+                        custom_auth=custom_auth,
                     )
                     texts.append(raw_one)
                     _add_usage(usage, row_usage)
@@ -471,6 +487,7 @@ def _batch_explain_gemini(
     model_name: str,
     custom_endpoint: str = "",
     verify_custom_ssl: bool = True,
+    custom_auth: str = "bearer",
     max_conflicts: int = 35,
     chunk_size: int = 2,
     progress_callback: Callable[[int, int], None] | None = None,
@@ -498,6 +515,7 @@ def _batch_explain_gemini(
             model_name=model_name,
             custom_endpoint=endpoint,
             verify_custom_ssl=verify_custom_ssl,
+            custom_auth=custom_auth,
             max_conflicts=max_conflicts,
             chunk_size=chunk_size,
             progress_callback=progress_callback,
@@ -609,6 +627,7 @@ def batch_explain_with_provider(
     model_name: str,
     custom_endpoint: str = "",
     verify_custom_ssl: bool = True,
+    custom_api_auth: str = "bearer",
     max_conflicts: int = 35,
     chunk_size: int = 2,
     progress_callback: Callable[[int, int], None] | None = None,
@@ -629,6 +648,7 @@ def batch_explain_with_provider(
         model_name=model_name,
         custom_endpoint=custom_endpoint,
         verify_custom_ssl=verify_custom_ssl,
+        custom_auth=custom_api_auth,
         max_conflicts=max_conflicts,
         chunk_size=chunk_size,
         progress_callback=progress_callback,
@@ -642,6 +662,7 @@ def batch_explain(
     model_name: str,
     custom_endpoint: str = "",
     verify_custom_ssl: bool = True,
+    custom_api_auth: str = "bearer",
     max_conflicts: int = 35,
     chunk_size: int = 2,
     progress_callback: Callable[[int, int], None] | None = None,
@@ -653,6 +674,7 @@ def batch_explain(
         model_name=model_name,
         custom_endpoint=custom_endpoint,
         verify_custom_ssl=verify_custom_ssl,
+        custom_api_auth=custom_api_auth,
         max_conflicts=max_conflicts,
         chunk_size=chunk_size,
         progress_callback=progress_callback,

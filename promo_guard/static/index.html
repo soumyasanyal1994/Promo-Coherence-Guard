@@ -35,7 +35,19 @@
       </label>
       <label class="checkbox" v-if="form.llmProvider === 'gemini' && form.customEndpoint">
         <input v-model="form.verifyCustomSsl" type="checkbox" />
-        <span>Verify custom endpoint SSL certificate</span>
+        <span>Verify SSL for custom endpoint (off matches Node axios <code>rejectUnauthorized: false</code>)</span>
+      </label>
+      <label class="field" v-if="form.llmProvider === 'gemini' && form.customEndpoint">
+        <span>Custom endpoint auth</span>
+        <select v-model="form.customApiAuth">
+          <option
+            v-for="opt in (config.custom_endpoint_auth || [])"
+            :key="opt.value"
+            :value="opt.value"
+          >
+            {{ opt.label }}
+          </option>
+        </select>
       </label>
       <label class="field">
         <span>LLM provider</span>
