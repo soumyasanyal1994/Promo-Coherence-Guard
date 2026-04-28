@@ -148,6 +148,45 @@ createApp({
       }
       return counts;
     },
+    getSeverityMetrics() {
+      const counts = this.getSeverityCounts();
+      const total = counts.CRITICAL + counts.WARNING + counts.INFO;
+      const pct = (n) => (total ? Math.round((n / total) * 100) : 0);
+      const weightedRisk = total
+        ? Math.round(((counts.CRITICAL * 3 + counts.WARNING * 2 + counts.INFO * 1) / (total * 3)) * 100)
+        : 0;
+      return {
+        total,
+        critical: counts.CRITICAL,
+        warning: counts.WARNING,
+        info: counts.INFO,
+        criticalPct: pct(counts.CRITICAL),
+        warningPct: pct(counts.WARNING),
+        infoPct: pct(counts.INFO),
+        weightedRisk,
+      };
+    },
+    getAnalyticalInsights() {
+      const m = this.getSeverityMetrics();
+      if (!m.total) return [];
+      const insights = [];
+      if (m.critical > 0) {
+        insights.push(
+          `${m.critical} critical conflict(s) detected (${m.criticalPct}%) - immediate commercial risk likely (below-floor, severe overlap, or invalid stacking).`
+        );
+      } else {
+        insights.push("No critical conflicts detected - no immediate high-severity pricing breach in this scan.");
+      }
+      if (m.warning > 0) {
+        insights.push(
+          `${m.warning} warning conflict(s) (${m.warningPct}%) indicate medium-priority configuration issues that can impact margin or customer clarity.`
+        );
+      }
+      insights.push(
+        `Overall risk score: ${m.weightedRisk}/100 (weighted by severity mix: critical > warning > info).`
+      );
+      return insights;
+    },
     destroySeverityChart() {
       if (this.severityChart) {
         this.severityChart.destroy();
@@ -163,9 +202,13 @@ createApp({
           return;
         }
         const counts = this.getSeverityCounts();
+        const textColor =
+          document.documentElement.getAttribute("data-theme") === "light" ? "#111827" : "#e5e7eb";
+        const gridColor =
+          document.documentElement.getAttribute("data-theme") === "light" ? "#d1d5db" : "#374151";
         this.destroySeverityChart();
         this.severityChart = new window.Chart(canvas, {
-          type: "bar",
+          type: "doughnut",
           data: {
             labels: ["CRITICAL", "WARNING", "INFO"],
             datasets: [
@@ -173,7 +216,9 @@ createApp({
                 label: "Conflicts",
                 data: [counts.CRITICAL, counts.WARNING, counts.INFO],
                 backgroundColor: ["#dc2626", "#d97706", "#2563eb"],
-                borderRadius: 8,
+                borderColor: gridColor,
+                borderWidth: 2,
+                hoverOffset: 8,
               },
             ],
           },
@@ -181,12 +226,24 @@ createApp({
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
-              legend: { display: false },
-            },
-            scales: {
-              y: {
-                beginAtZero: true,
-                ticks: { precision: 0 },
+              legend: {
+                position: "bottom",
+                labels: {
+                  color: textColor,
+                  usePointStyle: true,
+                  boxWidth: 10,
+                  padding: 18,
+                },
+              },
+              tooltip: {
+                callbacks: {
+                  label: (ctx) => {
+                    const total = ctx.dataset.data.reduce((a, b) => a + b, 0) || 1;
+                    const val = ctx.raw || 0;
+                    const p = Math.round((val / total) * 100);
+                    return `${ctx.label}: ${val} (${p}%)`;
+                  },
+                },
               },
             },
           },

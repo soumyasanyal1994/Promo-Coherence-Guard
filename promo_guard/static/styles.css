@@ -325,9 +325,79 @@ select:focus {
   margin: 0 0 10px;
 }
 
+.severity-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.severity-kpi {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--surface-muted);
+}
+
+.severity-kpi .kpi-label {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.severity-kpi .kpi-value {
+  margin: 3px 0 0;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.severity-kpi .kpi-sub {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.severity-kpi.critical {
+  border-color: rgba(220, 38, 38, 0.5);
+}
+
+.severity-kpi.warning {
+  border-color: rgba(217, 119, 6, 0.5);
+}
+
+.severity-kpi.info {
+  border-color: rgba(37, 99, 235, 0.5);
+}
+
+.severity-kpi.risk {
+  border-color: rgba(139, 92, 246, 0.5);
+}
+
 .severity-chart-wrap {
   position: relative;
   height: 220px;
+}
+
+.analysis-box {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--surface-muted);
+}
+
+.analysis-box h4 {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.analysis-box ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.analysis-box li {
+  margin: 6px 0;
 }
 
 .results-head {
@@ -422,5 +492,8 @@ pre {
   .form-grid,
   .upload-grid {
     grid-template-columns: 1fr;
+  }
+  .severity-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

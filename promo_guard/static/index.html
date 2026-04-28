@@ -150,9 +150,37 @@
         </div>
 
         <section class="severity-chart-card">
-          <h3>Severity distribution</h3>
+          <h3>Severity analytics</h3>
+          <div class="severity-kpis">
+            <div class="severity-kpi critical">
+              <p class="kpi-label">Critical</p>
+              <p class="kpi-value">{{ getSeverityMetrics().critical }}</p>
+              <p class="kpi-sub">{{ getSeverityMetrics().criticalPct }}%</p>
+            </div>
+            <div class="severity-kpi warning">
+              <p class="kpi-label">Warning</p>
+              <p class="kpi-value">{{ getSeverityMetrics().warning }}</p>
+              <p class="kpi-sub">{{ getSeverityMetrics().warningPct }}%</p>
+            </div>
+            <div class="severity-kpi info">
+              <p class="kpi-label">Info</p>
+              <p class="kpi-value">{{ getSeverityMetrics().info }}</p>
+              <p class="kpi-sub">{{ getSeverityMetrics().infoPct }}%</p>
+            </div>
+            <div class="severity-kpi risk">
+              <p class="kpi-label">Risk score</p>
+              <p class="kpi-value">{{ getSeverityMetrics().weightedRisk }}/100</p>
+              <p class="kpi-sub">weighted</p>
+            </div>
+          </div>
           <div class="severity-chart-wrap">
             <canvas id="severityChart" aria-label="Severity distribution chart"></canvas>
+          </div>
+          <div class="analysis-box">
+            <h4>Analytical insights</h4>
+            <ul>
+              <li v-for="(insight, i) in getAnalyticalInsights()" :key="i">{{ insight }}</li>
+            </ul>
           </div>
         </section>
 
