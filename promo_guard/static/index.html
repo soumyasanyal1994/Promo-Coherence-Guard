@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/static/styles.css" />
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -151,6 +152,13 @@
           <h2>Conflict report</h2>
           <button class="secondary-btn" @click="downloadPdf">Export report to PDF</button>
         </div>
+
+        <section class="severity-chart-card">
+          <h3>Severity distribution</h3>
+          <div class="severity-chart-wrap">
+            <canvas id="severityChart" aria-label="Severity distribution chart"></canvas>
+          </div>
+        </section>
 
         <article v-for="(row, idx) in conflicts" :key="idx" class="result-card">
           <div class="result-top">

@@ -37,6 +37,7 @@ createApp({
       showProgress: false,
       scanCompleted: false,
       isLightTheme: false,
+      severityChart: null,
     };
   },
   methods: {
@@ -130,13 +131,70 @@ createApp({
         if (payload.llm_used) {
           this.message += ` ${payload.llm_provider_used} explanations generated using ${payload.llm_model_used}.`;
         }
+        this.renderSeverityChart();
         this.downloadPdf();
         this.scanCompleted = true;
       } catch (err) {
         this.error = err.message || "Unexpected error.";
+        this.destroySeverityChart();
       } finally {
         this.isRunning = false;
       }
+    },
+    getSeverityCounts() {
+      const counts = { CRITICAL: 0, WARNING: 0, INFO: 0 };
+      for (const row of this.conflicts || []) {
+        const sev = String(row?.severity || "INFO").toUpperCase();
+        if (sev === "CRITICAL") counts.CRITICAL += 1;
+        else if (sev === "WARNING") counts.WARNING += 1;
+        else counts.INFO += 1;
+      }
+      return counts;
+    },
+    destroySeverityChart() {
+      if (this.severityChart) {
+        this.severityChart.destroy();
+        this.severityChart = null;
+      }
+    },
+    renderSeverityChart() {
+      if (!window.Chart) return;
+      this.$nextTick(() => {
+        const canvas = document.getElementById("severityChart");
+        if (!canvas) {
+          this.destroySeverityChart();
+          return;
+        }
+        const counts = this.getSeverityCounts();
+        this.destroySeverityChart();
+        this.severityChart = new window.Chart(canvas, {
+          type: "bar",
+          data: {
+            labels: ["CRITICAL", "WARNING", "INFO"],
+            datasets: [
+              {
+                label: "Conflicts",
+                data: [counts.CRITICAL, counts.WARNING, counts.INFO],
+                backgroundColor: ["#dc2626", "#d97706", "#2563eb"],
+                borderRadius: 8,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+            },
+            scales: {
+              y: {
+                beginAtZero: true,
+                ticks: { precision: 0 },
+              },
+            },
+          },
+        });
+      });
     },
     severityClass(severity) {
       if (severity === "CRITICAL") return "critical";

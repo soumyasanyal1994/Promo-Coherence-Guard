@@ -313,6 +313,23 @@ select:focus {
   margin-top: 20px;
 }
 
+.severity-chart-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 15px;
+  margin-bottom: 12px;
+  background: var(--surface-card);
+}
+
+.severity-chart-card h3 {
+  margin: 0 0 10px;
+}
+
+.severity-chart-wrap {
+  position: relative;
+  height: 220px;
+}
+
 .results-head {
   display: flex;
   align-items: center;
