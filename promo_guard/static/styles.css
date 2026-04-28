@@ -147,6 +147,71 @@ body {
   margin-top: 6px;
 }
 
+.hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.token-calculator-card {
+  width: min(420px, 100%);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--surface-raised);
+}
+
+.token-calculator-card h3 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+.token-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.token-chip {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: var(--surface-muted);
+}
+
+.token-chip span {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.token-chip strong {
+  font-size: 17px;
+}
+
+.token-rate-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.token-rate-grid .field {
+  margin-bottom: 0;
+}
+
+.token-cost {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.token-cost strong {
+  color: var(--text);
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -495,5 +560,9 @@ pre {
   }
   .severity-kpis {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .token-metrics,
+  .token-rate-grid {
+    grid-template-columns: 1fr;
   }
 }

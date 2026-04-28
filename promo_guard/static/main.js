@@ -24,6 +24,10 @@ createApp({
         horizonDays: 7,
         useSamples: true,
       },
+      tokenPricing: {
+        inputPerM: 0,
+        outputPerM: 0,
+      },
       promosFile: null,
       pricingFile: null,
       conflicts: [],
@@ -147,6 +151,23 @@ createApp({
         else counts.INFO += 1;
       }
       return counts;
+    },
+    getTokenMetrics() {
+      const usage = this.llmUsage || { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
+      const inputTokens = Number(usage.input_tokens || 0);
+      const outputTokens = Number(usage.output_tokens || 0);
+      const totalTokens = Number(usage.total_tokens || inputTokens + outputTokens);
+      const inputCost = (inputTokens / 1_000_000) * Number(this.tokenPricing.inputPerM || 0);
+      const outputCost = (outputTokens / 1_000_000) * Number(this.tokenPricing.outputPerM || 0);
+      const estimatedCost = inputCost + outputCost;
+      return {
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        inputCost,
+        outputCost,
+        estimatedCost,
+      };
     },
     getSeverityMetrics() {
       const counts = this.getSeverityCounts();

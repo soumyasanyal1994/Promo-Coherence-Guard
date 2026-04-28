@@ -78,8 +78,40 @@
 
     <main class="panel main">
       <header class="hero">
-        <h1>Promo Coherence Guard</h1>
-        <p>Deterministic promotion conflicts first. LLM narratives remain advisory only.</p>
+        <div>
+          <h1>Promo Coherence Guard</h1>
+          <p>Deterministic promotion conflicts first. LLM narratives remain advisory only.</p>
+        </div>
+        <section class="token-calculator-card">
+          <h3>Token Calculator</h3>
+          <div class="token-metrics">
+            <div class="token-chip">
+              <span>Input</span>
+              <strong>{{ getTokenMetrics().inputTokens }}</strong>
+            </div>
+            <div class="token-chip">
+              <span>Output</span>
+              <strong>{{ getTokenMetrics().outputTokens }}</strong>
+            </div>
+            <div class="token-chip">
+              <span>Total</span>
+              <strong>{{ getTokenMetrics().totalTokens }}</strong>
+            </div>
+          </div>
+          <div class="token-rate-grid">
+            <label class="field">
+              <span>Input $ / 1M</span>
+              <input v-model.number="tokenPricing.inputPerM" type="number" min="0" step="0.0001" />
+            </label>
+            <label class="field">
+              <span>Output $ / 1M</span>
+              <input v-model.number="tokenPricing.outputPerM" type="number" min="0" step="0.0001" />
+            </label>
+          </div>
+          <p class="token-cost">
+            Estimated cost: <strong>${{ getTokenMetrics().estimatedCost.toFixed(6) }}</strong>
+          </p>
+        </section>
       </header>
 
       <section class="meta-grid">
@@ -139,10 +171,6 @@
       <p v-if="message" class="message info">{{ message }}</p>
       <p v-if="error" class="message error">{{ error }}</p>
       <p v-if="llmWarning" class="message warn">{{ llmWarning }}</p>
-      <p v-if="llmUsage && llmUsage.total_tokens > 0" class="message info">
-        Token usage - Input: {{ llmUsage.input_tokens }}, Output: {{ llmUsage.output_tokens }}, Total: {{ llmUsage.total_tokens }}
-      </p>
-
       <section v-if="conflicts.length" class="results">
         <div class="results-head">
           <h2>Conflict report</h2>
